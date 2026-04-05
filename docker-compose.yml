@@ -1,0 +1,26 @@
+services:
+  memgraph-db:
+    image: memgraph/memgraph:3.0.0
+    container_name: memgraph-ultra
+    ports:
+      - "7687:7687" # Bolt port
+    command: [ "--log-level=TRACE" ]
+
+    networks:
+      - ultra-network
+
+  memgraph-lab:
+    image: memgraph/lab:latest
+    container_name: memgraph-lab
+    ports:
+      - "3000:3000" # Memgraph Lab (UI)
+    environment:
+      - QUICK_CONNECT_URL=bolt://memgraph-db:7687
+    depends_on:
+      - memgraph-db
+    networks:
+      - ultra-network
+
+networks:
+  ultra-network:
+    driver: bridge
