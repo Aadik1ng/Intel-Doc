@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from app.models.document import AskRequest, AskResponse
 from app.agents.pipeline import run_pipeline
+import openai
+from app.config import get_settings
 
 router = APIRouter()
 
@@ -11,7 +13,7 @@ def ask_question(request: AskRequest):
     if not request.question.strip():
         raise HTTPException(400, "question cannot be empty")
 
-    result = run_pipeline(request.document_id, request.question)
+    result = run_pipeline(request.document_id, request.question, fast_mode=request.fast_mode, query_id=request.query_id)
 
     # Legacy confidence support
     ov_conf = result.get("overall_confidence", result.get("confidence", 0.0))
@@ -21,6 +23,7 @@ def ask_question(request: AskRequest):
         source_texts=result.get("source_texts", []),
         confidence=ov_conf,
         warning=result.get("warning"),
+        query_id=result.get("query_id"),
         
         # New observability metrics
         model_confidence=result.get("model_confidence"),
@@ -53,3 +56,33 @@ def ask_question(request: AskRequest):
         query_complexity_score=result.get("query_complexity_score"),
         answer_length=result.get("answer_length"),
     )
+
+@router.post("/ask_audio", response_model=AskResponse)
+async def ask_audio(document_id: str = Form(...), query_id: str = Form("0"), file: UploadFile = File(...)):
+    settings = get_settings()
+    # openai 2.x uses AsyncOpenAI
+    client = openai.AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    
+    # Read file content into memory for Whisper
+    content = await file.read()
+    
+    transcription = await client.audio.transcriptions.create(
+        model="whisper-1",
+        file=(file.filename, content, file.content_type)
+    )
+    
+    question = transcription.text
+    if not question.strip():
+        raise HTTPException(400, "Could not transcribe audio")
+        
+    req = AskRequest(
+        document_id=document_id,
+        question=question,
+        fast_mode=True,
+        query_id=query_id
+    )
+    
+    # Hand off to standard text pipeline execution
+    resp = ask_question(req)
+    resp.transcribed_question = f"🎤 {question}"
+    return resp
