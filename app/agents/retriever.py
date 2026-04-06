@@ -82,3 +82,36 @@ def hybrid_retrieve(query: str, filters: MetadataFilter, doc_id: str) -> list[di
             combined.append(r)
 
     return combined[:12]  # Cap at 12 total results
+
+def parallel_retrieve(query: str, filters: MetadataFilter, doc_id: str, top_k: int = 5) -> list[dict]:
+    """Concurrent Retrieval for Voice Fast Mode (Sub-200ms)."""
+    import concurrent.futures
+
+    def _get_vec():
+        # Fast path vector search - restrict to top_k directly
+        return retrieve_vector(query, filters, top_k=top_k*2)
+        
+    def _get_graph():
+        words = [w.strip("?.,'") for w in query.split() if w.lower() not in ["what", "when", "where", "how", "who"] and len(w) > 3]
+        if not words: return []
+        word = words[0] # Just test the primary noun to save time
+        return retrieve_graph(doc_id, word)
+
+    combined = []
+    seen = set()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        future_vec = executor.submit(_get_vec)
+        future_graph = executor.submit(_get_graph)
+        
+        vec_results = future_vec.result()
+        graph_results = future_graph.result()
+        
+    for r in vec_results + graph_results:
+        key = r.get("text", "")[:80]
+        if key not in seen:
+            seen.add(key)
+            combined.append(r)
+            
+    # Sort combined by similarity (if present) so good vector hits win out if tied
+    combined.sort(key=lambda x: x.get("similarity", 0.0), reverse=True)
+    return combined[:top_k]
