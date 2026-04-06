@@ -24,12 +24,16 @@ class AskRequest(BaseModel):
     document_id: str
     question: str
     filters: Optional[MetadataFilter] = None
+    fast_mode: bool = False
+    query_id: Optional[str] = None
 
 class AskResponse(BaseModel):
     answer: str
     source_texts: List[str]
     confidence: float
     warning: Optional[str] = None
+    query_id: Optional[str] = None
+    transcribed_question: Optional[str] = None
     
     # Advanced Metrics
     model_confidence: Optional[float] = None
