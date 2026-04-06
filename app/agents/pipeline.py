@@ -238,7 +238,7 @@ def not_found_node(state: AgentState) -> AgentState:
     return {
         **state,
         "answer": {
-            "answer": "Not specified in the document.",
+            "answer": "Couldn't find that in the document.",
             "source_texts": [],
             "confidence": 0.0,
             "warning": f"Guardrail triggered: {failure}",
@@ -302,7 +302,32 @@ def get_pipeline():
     return _pipeline
 
 
-def run_pipeline(document_id: str, question: str) -> dict:
+def run_pipeline(document_id: str, question: str, fast_mode: bool = False, query_id: str = None) -> dict:
+    import time
+    from app.agents.retriever import parallel_retrieve
+    from app.services.metadata import MetadataFilter
+    from app.agents.mega_node import run_mega_node
+
+    if fast_mode:
+        start_time = time.time()
+        logger.info(f"⚡ FAST MODE Pipeline triggered for query: {question}")
+        filters = MetadataFilter(document_id=document_id)
+        
+        # Parallel Retrieve
+        ret_start = time.time()
+        chunks = parallel_retrieve(question, filters, document_id)
+        ret_lat = time.time() - ret_start
+        
+        # Single Mega-Node Call
+        result = run_mega_node(question, chunks, document_id, query_id)
+        
+        # Inject fast-mode specific metrics
+        result["retrieval_latency"] = round(ret_lat, 2)
+        result["latency_seconds"] = round(time.time() - start_time, 2)
+        result["retrieval_success"] = len(chunks) > 0
+        result["retrieval_iterations"] = 1
+        return result
+
     pipeline = get_pipeline()
     initial_state: AgentState = {
         "question": question,
@@ -318,9 +343,11 @@ def run_pipeline(document_id: str, question: str) -> dict:
         "metrics": {},
     }
     final_state = pipeline.invoke(initial_state)
-    return final_state.get("answer", {
-        "answer": "Not specified in the document.",
+    ans = final_state.get("answer", {
+        "answer": "Couldn't find that in the document.",
         "source_texts": [],
         "confidence": 0.0,
         "warning": "Pipeline completed without answer",
     })
+    ans["query_id"] = query_id
+    return ans
