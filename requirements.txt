@@ -32,3 +32,10 @@ python-docx
 # UI
 streamlit
 httpx
+
+# Real-time Voice (LiveKit)
+livekit-agents
+livekit-api
+livekit-plugins-openai
+livekit-plugins-silero
+scipy
