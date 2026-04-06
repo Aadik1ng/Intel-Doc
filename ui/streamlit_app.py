@@ -156,6 +156,9 @@ st.set_page_config(
     layout="wide",
 )
 
+if "latest_query_id" not in st.session_state:
+    st.session_state["latest_query_id"] = 0
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🚛 Ultra Doc-Intelligence")
@@ -286,39 +289,81 @@ with tab_ask:
                         st.caption("⚠️ Guardrail Triggered")
         st.divider()
 
-        question = st.text_input("❓ Your Question", placeholder="What is the carrier rate?", key=f"q_{len(history_records)}")
+        col_q, col_btn_ask, col_btn_mic = st.columns([0.7, 0.15, 0.15])
+        with col_q:
+            question = st.text_input("❓ Your Question", placeholder="What is the carrier rate?", key=f"q_{len(history_records)}", label_visibility="collapsed")
+            
+        with col_btn_ask:
+            ask_pressed = st.button("🔍 Ask", type="primary", use_container_width=True)
+            
+        audio_data = None
+        with col_btn_mic:
+            with st.popover("🎤 Voice", use_container_width=True):
+                audio_method = st.radio("Method", ["Microphone", "Upload File"], label_visibility="collapsed")
+                if audio_method == "Microphone":
+                    audio_data = st.audio_input("Speak", label_visibility="collapsed")
+                else:
+                    audio_data = st.file_uploader("Upload Audio", type=["mp3", "wav", "m4a", "ogg", "webm"], label_visibility="collapsed")
+                
+                send_audio = st.button("🚀 Send Audio", type="primary", use_container_width=True, disabled=audio_data is None)
+
         example_qs = ["What is the carrier rate?", "Who is the consignee?", "When is pickup scheduled?",
                       "What is the equipment type?", "Who is the shipper?"]
         st.markdown("**Examples:** " + " | ".join(f"`{q}`" for q in example_qs))
 
-        if st.button("🔍 Ask", type="primary") and question:
+        if (ask_pressed and question) or (send_audio and audio_data):
             filters = {}
             if filter_page > 0:
                 filters["source_page"] = int(filter_page)
             if filter_doctype != "(none)":
                 filters["doc_type"] = filter_doctype
 
-            payload = {
-                "document_id": doc_id,
-                "question": question,
-                "filters": filters or None,
-            }
-
+            # Incremental query ID for state consistency
+            st.session_state["latest_query_id"] += 1
+            
             with st.spinner("Classifying → Retrieving → Validating → Answering…"):
                 import time
                 start_t = time.time()
                 try:
-                    response = httpx.post(f"{API_BASE}/ask", json=payload, timeout=60.0)
+                    is_audio = send_audio and audio_data is not None
+                    
+                    if is_audio:
+                        files = {"file": (audio_data.name, audio_data.getvalue(), audio_data.type)}
+                        data_form = {
+                            "document_id": doc_id,
+                            "query_id": str(st.session_state["latest_query_id"])
+                        }
+                        response = httpx.post(f"{API_BASE}/ask_audio", data=data_form, files=files, timeout=60.0)
+                        temp_question = "🎤 Processing voice query..."
+                    else:
+                        payload = {
+                            "document_id": doc_id,
+                            "question": question,
+                            "filters": filters or None,
+                            "query_id": str(st.session_state["latest_query_id"])
+                        }
+                        response = httpx.post(f"{API_BASE}/ask", json=payload, timeout=60.0)
+                        temp_question = question
+                    
                     latency = time.time() - start_t
                     
                     if response.status_code == 200:
                         data = response.json()
                         
+                        # Apply transcript if it came from audio
+                        final_question = data.get("transcribed_question") or temp_question
+                        
+                        # VALIDATE QUERY ID (Alignment with LiveKit logic)
+                        incoming_id = int(data.get("query_id") or 0)
+                        if incoming_id < st.session_state["latest_query_id"] and incoming_id != 0:
+                            st.warning(f"Discarded stale response (ID: {incoming_id})")
+                            st.stop()
+                        
                         # Add to SQLite database
                         save_chat(
                             doc_id=doc_id,
                             ts=time.strftime("%Y-%m-%d %H:%M:%S"),
-                            question=question,
+                            question=final_question,
                             answer=data["answer"],
                             metrics=data
                         )
@@ -331,6 +376,9 @@ with tab_ask:
                             badge = f"🟡 Medium Confidence ({conf:.0%})"
                         else:
                             badge = f"🔴 Low Confidence ({conf:.0%})"
+
+                        if is_audio:
+                            st.success(f"**Transcribed:** {final_question}")
 
                         st.markdown(f"### Answer {badge}")
                         st.markdown(f"> {data['answer']}")
