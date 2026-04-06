@@ -35,6 +35,32 @@ async def lifespan(app: FastAPI):
         print("✅ Memgraph indexes ready")
     except Exception as e:
         print(f"⚠️  Could not set up Memgraph indexes: {e}")
+        
+    print("🔥 Pre-warming LLM and Embeddings...")
+    try:
+        from app.services.embedder import embed_query
+        from app.config import get_settings
+        settings = get_settings()
+        
+        embed_query("warmup")
+        litellm.completion(
+            model=settings.LITELLM_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=settings.OPENAI_API_KEY,
+            max_tokens=1
+        )
+        
+        # STT Warmup
+        print("🎙️ Warmup STT...")
+        from livekit.plugins import openai
+        stt = openai.STT()
+        # Just creating the object and a dummy call if possible, 
+        # but usually object creation is the bottleneck for first-run plugins.
+        
+        print("✅ Pre-warming complete")
+    except Exception as e:
+        print(f"⚠️  Pre-warming failed: {e}")
+        
     yield
 
 app = FastAPI(
