@@ -7,9 +7,10 @@ import httpx
 import json
 import time
 import sqlite3
+import os
 import pandas as pd
 
-API_BASE = "http://127.0.0.1:8000"
+API_BASE = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 DB_PATH = "chat_history.db"
 
 # ── Database Initialization ────────────────────────────────────────────────────
