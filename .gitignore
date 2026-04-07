@@ -1,0 +1,12 @@
+tests/
+results/
+.env
+logs/
+data/
+__pycache__/
+*.pdf
+*.csv
+todo
+*.db
+*.docx
+Analyzing Agentic GraphRAG Concepts.md

@@ -9,8 +9,10 @@ settings = get_settings()
 
 
 def get_driver():
+    # If using Railway's public URL, we need secure routing (neo4j+s or bolt+s)
+    protocol = "bolt+s" if "up.railway.app" in settings.MEMGRAPH_HOST else "bolt"
     return GraphDatabase.driver(
-        f"bolt://{settings.MEMGRAPH_HOST}:{settings.MEMGRAPH_PORT}",
+        f"{protocol}://{settings.MEMGRAPH_HOST}:{settings.MEMGRAPH_PORT}",
         auth=("", ""),
     )
 
