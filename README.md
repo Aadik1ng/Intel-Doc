@@ -2,54 +2,69 @@
 
 Agentic GraphRAG assistant for logistics document Q&A using **Memgraph 3.0**, **LlamaIndex**, **LangGraph**, and **LiteLLM**. Optimized for high-precision extraction with **<5% hallucination rates**.
 
-## 🏗️ Architecture (Tier 1 & 2 Optimized)
+## 🏗️ Architecture
 
 ```mermaid
 graph TD
     A[Question] --> B[Classify]
     B --> C[Hybrid Retrieve]
-    C --> D[Batch Rerank]
-    D --> E[Validate Judge]
-    E -- Retry --> F[Query Rewrite]
+    C --> D[Validate Context Relevance]
+    D -- Retry --> F[Query Rewrite]
     F --> C
-    E -- Success --> G[Grounded Answer]
+    D -- Success --> G[Grounded Answer]
     G --> H[Final Payload + Telemetry]
 ```
 
 **Workflow Highlights:**
-- **Batch Reranker**: Uses an LLM-based reranking layer to prune noise and resolve entity confusion (e.g., distinguishing between Shipper and Consignee addresses).
-- **Judge-First Safety**: Replaced simple similarity thresholds with dual LLM judges for **Context Relevance** and **Task Completion**.
-- **Entity-Aware Grounding**: The answerer performs a final audit to ensure every claim is literally supported by the document.
+- **Agentic Pipeline**: LangGraph orchestrates cyclic loops, rewrites, and fast-fail fallbacks dynamically based on query classification.
+- **Judge-First Safety**: A dedicated Validation Node runs *before* generation to gauge Context Relevance. If context lacks facts, it fast-fails to `"Not specified in the document."`
+- **Strict Grounding Node**: The answerer performs a final audit post-generation, evaluating `faithfulness` against the exact text chunks to verify no extra/inferred information was injected.
 
 ---
 
-## 🛡️ Reliability & Guardrails
+## 🧩 Chunking Strategy
 
-We implement a multi-stage validation pipeline to ensure production-grade trustworthiness:
-
-1. **Batch Validation**: A single-call LLM judge evaluates both `Context Score` (Is the answer here?) and `Relevance Score` (Does it match the user intent?).
-2. **Reranking Filter**: Top 10 chunks are reranked to ensure the most specific and accurate context is passed to the generator.
-3. **Abstention Logic**: The system is trained to return `not_found` rather than hallucinate when data is missing.
-
-### 📊 Observability Suite
-Every query captures **25+ metrics**, including:
-- **Faithfulness Score**: LLM-based grounding audit.
-- **Completeness Score**: Ensuring multi-part questions are fully answered.
-- **Telemetry**: Latency breakdown (Retrieve vs Rerank vs Gen), Token Usage, and USD Cost.
-- **Failure Mode Classification**: `none`, `hallucination`, `retrieval_failure`, or `not_found`.
+To prioritize high fact-density and avoid contextual noise:
+- **Small-Scale Node Chunking**: We utilize LlamaIndex's `SentenceSplitter` configured for isolated fact retention (`chunk_size=256`, `chunk_overlap=50`). 
+- **Graph-Native Extraction**: Top chunks (up to 30 per document) are processed to extract entities (`Shipper`, `Carrier`, `Consignee`) and relationships (`SHIPS_FROM`, `DELIVERS_TO`), linking chunks directly to discrete extracted entities in Memgraph.
 
 ---
 
-## 📈 Performance Benchmarks (RC & BOL)
+## 🔍 Retrieval Method
 
-After Tier 1 & 2 optimizations, the system achieved the following results on logistics datasets:
+We use a **Hybrid Retrieval** strategy merging embedding similarity with logical graph traversals:
+1. **Vector Search (Path A)**: Encoded metadata-filtered lookup using Langchain mapped over Memgraph vector indexes (`top_k=15`).
+2. **Graph Traversal (Path B)**: BFS-style retrieval bridging query entities to their specific named entity counterparts in Memgraph.
+*The results are deduplicated and capped dynamically (top 12 candidates) to feed the optimal context window.*
 
-| Metric | Carrier (RC) | Loading (BOL) | Improvement |
-| :--- | :--- | :--- | :--- |
-| **Hallucination Rate** | **0.0%** | **3.3%** | 📉 **-88% vs Prototype** |
-| **Faithfulness** | 97.5% | 86.7% | ✅ High precision grounding |
-| **Avg Latency** | 7.51s | 6.81s | ⚡ Optimized batching |
-| **Avg Tokens/Query** | 838 | 510 | 💰 Cost-efficient |
+---
+
+## 🛡️ Guardrails Approach
+
+A strict set of guardrails ensures high safety for enterprise logistics:
+1. **Aggressive Abstention**: If context fails, the system bypasses evaluation loops entirely and safely outputs: `"Not specified in the document."`
+2. **Prompt Hardening**: Prompts explicitly forbid formatting standardization and default prefixes (e.g., adding "Fax:" before fax numbers). Enforces complete sentences for reasoning responses.
+3. **Hallucination Reductant**: System will flag an uncaptured Hallucination if `faithfulness_score < 0.5` or `answer_relevance < 0.5`, guaranteeing metrics alert on rogue model behavior.
+
+---
+
+## 📊 Confidence Scoring Method
+
+We calculate a rigid **Overall Confidence** by applying a weighted algorithmic composite:
+`0.4 * model_confidence + 0.3 * retrieval_confidence + 0.3 * faithfulness_score`
+
+- **Faithfulness Score**: A post-generation LLM judge (0.0 to 1.0) explicitly validating if the answer exists wholly in the retrieved text chunks.
+- **Retrieval Confidence**: Synthesized from vector cosine similarity.
+- **Model Confidence**: Confidence generated by the underlying model natively.
+
+---
+
+## 🚨 Failure Cases
+
+The pipeline categorizes failures into observable states via extensive telemetry:
+- **`not_found`**: The system behaves safely, correctly identifying that the context didn't support the answer and emitting the expected abstention text.
+- **`hallucination`**: The system attempted to answer, but our post-generation Judge evaluated a low faithfulness/relevance margin.
+- **`retrieval_failure`**: No chunks whatsoever were returned during Hybrid Retrieval.
 
 ---
 
@@ -75,8 +90,10 @@ uvicorn app.main:app --reload --port 8000
 python -m streamlit run ui/streamlit_app.py
 ```
 
-## 🚀 Future Roadmap
-- [ ] Add OCR fallback (Tesseract/Surya) for scanned image PDFs.
-- [ ] Multi-document reasoning (Compare BOL vs RC totals).
-- [ ] Implement conversation memory with LangGraph persistence.
-- [ ] Native Memgraph Lab visualization integration.
+---
+
+## 🚀 Improvement Ideas (Future Roadmap)
+- [ ] **Document Re-Ingestion Scripts**: Automate `Memgraph` wiping & DB re-ingestion after chunk parameters change.
+- [ ] **OCR Fallbacks**: Add Tesseract/Surya for unreadable or scanned logistics image PDFs.
+- [ ] **Cross-Document Reasoning**: Compare discrepancies across different PDFs (e.g. BOL totals vs RC records).
+- [ ] **Conversational Memory**: Implement Chat persistence using standard LangGraph `checkpointer`.
